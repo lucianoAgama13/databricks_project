@@ -1,238 +1,134 @@
-# .github/workflows/databricks_cicd.yml
-# ============================================================
-# CI/CD Pipeline — Databricks ETL Medallion
-# Ejecuta los notebooks Bronze → Silver → Gold en orden
-# ============================================================
-
 name: Databricks ETL Pipeline
 
 on:
   push:
     branches:
       - main
-      - develop
-  pull_request:
-    branches:
-      - main
-  workflow_dispatch:   # Permite ejecución manual desde GitHub UI
+  workflow_dispatch:
 
 jobs:
-  # ──────────────────────────────────────────────────────────
-  # JOB 1: Validación de código Python (linting)
-  # ──────────────────────────────────────────────────────────
   lint:
-    name: 🔍 Lint & Validate
+    name: Lint & Validate
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-
-      - name: Instalar dependencias de validación
+      - name: Validar sintaxis
         run: |
           pip install pyflakes
-
-      - name: Validar sintaxis notebooks
-        run: |
-          echo "Validando sintaxis Python en notebooks..."
-          find notebooks/ -name "*.py" -exec python -m pyflakes {} \;
+          find . -name "*.py" -exec python -m pyflakes {} \;
           echo "✅ Sintaxis válida"
-
-      - name: Verificar estructura de archivos
+      - name: Verificar estructura
         run: |
-          echo "Verificando estructura del proyecto..."
-          test -f config/settings.py       && echo "✅ config/settings.py"
-          test -f notebooks/bronze/01_ingest_raw.py     && echo "✅ Bronze notebook"
-          test -f notebooks/silver/02_clean_transform.py && echo "✅ Silver notebook"
-          test -f notebooks/gold/03_aggregate_metrics.py && echo "✅ Gold notebook"
+          test -f config/settings.py && echo "✅ config/settings.py"
+          test -f notebooks/bronze/01_ingest_raw.py && echo "✅ Bronze"
+          test -f notebooks/silver/02_clean_transform.py && echo "✅ Silver"
+          test -f notebooks/gold/03_aggregate_metrics.py && echo "✅ Gold"
 
-  # ──────────────────────────────────────────────────────────
-  # JOB 2: Deploy notebooks a Databricks Workspace
-  # ──────────────────────────────────────────────────────────
   deploy:
-    name: 🚀 Deploy to Databricks
+    name: Deploy to Databricks
     runs-on: ubuntu-latest
     needs: lint
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-
     steps:
-      - name: Checkout código
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
 
-      - name: Instalar Databricks CLI
-        run: |
-          pip install databricks-cli
-
-      - name: Configurar Databricks CLI
+      - name: Deploy notebooks
         env:
-          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          databricks configure --token <<EOF
-          $DATABRICKS_HOST
-          $DATABRICKS_TOKEN
-          EOF
+          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/config || true
+          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/notebooks/bronze || true
+          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/notebooks/silver || true
+          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/notebooks/gold || true
 
-      - name: Crear carpetas en Workspace
-        run: |
-          databricks workspace mkdirs /Repos/cicd/databricks_project/config           || true
-          databricks workspace mkdirs /Repos/cicd/databricks_project/notebooks/bronze || true
-          databricks workspace mkdirs /Repos/cicd/databricks_project/notebooks/silver || true
-          databricks workspace mkdirs /Repos/cicd/databricks_project/notebooks/gold   || true
+          databricks workspace import config/settings.py \
+            /Repos/lucianoAgama13/databricks_project/config/settings \
+            --language PYTHON --overwrite || true
 
-      - name: Upload config
-        run: |
-          databricks workspace import \
-            config/settings.py \
-            /Repos/cicd/databricks_project/config/settings \
+          databricks workspace import notebooks/bronze/01_ingest_raw.py \
+            /Repos/lucianoAgama13/databricks_project/notebooks/bronze/01_ingest_raw \
             --language PYTHON --overwrite
 
-      - name: Upload Bronze notebook
-        run: |
-          databricks workspace import \
-            notebooks/bronze/01_ingest_raw.py \
-            /Repos/cicd/databricks_project/notebooks/bronze/01_ingest_raw \
+          databricks workspace import notebooks/silver/02_clean_transform.py \
+            /Repos/lucianoAgama13/databricks_project/notebooks/silver/02_clean_transform \
             --language PYTHON --overwrite
 
-      - name: Upload Silver notebook
-        run: |
-          databricks workspace import \
-            notebooks/silver/02_clean_transform.py \
-            /Repos/cicd/databricks_project/notebooks/silver/02_clean_transform \
+          databricks workspace import notebooks/gold/03_aggregate_metrics.py \
+            /Repos/lucianoAgama13/databricks_project/notebooks/gold/03_aggregate_metrics \
             --language PYTHON --overwrite
 
-      - name: Upload Gold notebook
-        run: |
-          databricks workspace import \
-            notebooks/gold/03_aggregate_metrics.py \
-            /Repos/cicd/databricks_project/notebooks/gold/03_aggregate_metrics \
-            --language PYTHON --overwrite
+          echo "✅ Notebooks desplegados"
 
-      - name: ✅ Deploy completado
-        run: echo "Notebooks desplegados exitosamente en Databricks Workspace."
-
-  # ──────────────────────────────────────────────────────────
-  # JOB 3: Ejecutar pipeline ETL completo
-  # ──────────────────────────────────────────────────────────
   run_etl:
-    name: ⚡ Run ETL Pipeline
+    name: Run ETL Pipeline
     runs-on: ubuntu-latest
     needs: deploy
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
-
     steps:
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+      - name: Setup Databricks CLI
+        uses: databricks/setup-cli@main
 
-      - name: Instalar Databricks CLI
-        run: pip install databricks-cli
-
-      - name: Configurar Databricks CLI
+      - name: Run Bronze
         env:
-          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          databricks configure --token <<EOF
-          $DATABRICKS_HOST
-          $DATABRICKS_TOKEN
-          EOF
+          RUN_ID=$(databricks jobs submit \
+            --json '{
+              "run_name": "CI_Bronze",
+              "existing_cluster_id": "${{ secrets.DATABRICKS_CLUSTER_ID }}",
+              "notebook_task": {
+                "notebook_path": "/Repos/lucianoAgama13/databricks_project/notebooks/bronze/01_ingest_raw"
+              }
+            }' | jq -r '.run_id')
+          echo "Bronze Run ID: $RUN_ID"
+          databricks runs wait $RUN_ID
+          STATE=$(databricks runs get $RUN_ID | jq -r '.state.result_state')
+          echo "Bronze result: $STATE"
+          [ "$STATE" = "SUCCESS" ] || exit 1
 
-      - name: 🥉 Ejecutar Bronze — Ingesta Raw
+      - name: Run Silver
         env:
-          DATABRICKS_CLUSTER_ID: ${{ secrets.DATABRICKS_CLUSTER_ID }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          echo "Ejecutando Bronze Layer..."
-          RUN_ID=$(databricks runs submit \
-            --existing-cluster-id "$DATABRICKS_CLUSTER_ID" \
-            --notebook-task '{
-              "notebook_path": "/Repos/cicd/databricks_project/notebooks/bronze/01_ingest_raw"
-            }' \
-            --run-name "CI_Bronze_$(date +%Y%m%d_%H%M%S)" \
-            | python -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
-          echo "Run ID Bronze: $RUN_ID"
+          RUN_ID=$(databricks jobs submit \
+            --json '{
+              "run_name": "CI_Silver",
+              "existing_cluster_id": "${{ secrets.DATABRICKS_CLUSTER_ID }}",
+              "notebook_task": {
+                "notebook_path": "/Repos/lucianoAgama13/databricks_project/notebooks/silver/02_clean_transform"
+              }
+            }' | jq -r '.run_id')
+          echo "Silver Run ID: $RUN_ID"
+          databricks runs wait $RUN_ID
+          STATE=$(databricks runs get $RUN_ID | jq -r '.state.result_state')
+          echo "Silver result: $STATE"
+          [ "$STATE" = "SUCCESS" ] || exit 1
 
-          # Esperar a que finalice
-          while true; do
-            STATE=$(databricks runs get --run-id $RUN_ID \
-              | python -c "import sys,json; d=json.load(sys.stdin); print(d['state']['life_cycle_state'])")
-            echo "Estado Bronze: $STATE"
-            if [ "$STATE" = "TERMINATED" ]; then break; fi
-            sleep 15
-          done
-
-          RESULT=$(databricks runs get --run-id $RUN_ID \
-            | python -c "import sys,json; print(json.load(sys.stdin)['state']['result_state'])")
-          echo "Resultado Bronze: $RESULT"
-          [ "$RESULT" = "SUCCESS" ] || exit 1
-
-      - name: 🥈 Ejecutar Silver — Limpieza
+      - name: Run Gold
         env:
-          DATABRICKS_CLUSTER_ID: ${{ secrets.DATABRICKS_CLUSTER_ID }}
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          echo "Ejecutando Silver Layer..."
-          RUN_ID=$(databricks runs submit \
-            --existing-cluster-id "$DATABRICKS_CLUSTER_ID" \
-            --notebook-task '{
-              "notebook_path": "/Repos/cicd/databricks_project/notebooks/silver/02_clean_transform"
-            }' \
-            --run-name "CI_Silver_$(date +%Y%m%d_%H%M%S)" \
-            | python -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
+          RUN_ID=$(databricks jobs submit \
+            --json '{
+              "run_name": "CI_Gold",
+              "existing_cluster_id": "${{ secrets.DATABRICKS_CLUSTER_ID }}",
+              "notebook_task": {
+                "notebook_path": "/Repos/lucianoAgama13/databricks_project/notebooks/gold/03_aggregate_metrics"
+              }
+            }' | jq -r '.run_id')
+          echo "Gold Run ID: $RUN_ID"
+          databricks runs wait $RUN_ID
+          STATE=$(databricks runs get $RUN_ID | jq -r '.state.result_state')
+          echo "Gold result: $STATE"
+          [ "$STATE" = "SUCCESS" ] || exit 1
 
-          while true; do
-            STATE=$(databricks runs get --run-id $RUN_ID \
-              | python -c "import sys,json; d=json.load(sys.stdin); print(d['state']['life_cycle_state'])")
-            echo "Estado Silver: $STATE"
-            if [ "$STATE" = "TERMINATED" ]; then break; fi
-            sleep 15
-          done
-
-          RESULT=$(databricks runs get --run-id $RUN_ID \
-            | python -c "import sys,json; print(json.load(sys.stdin)['state']['result_state'])")
-          echo "Resultado Silver: $RESULT"
-          [ "$RESULT" = "SUCCESS" ] || exit 1
-
-      - name: 🥇 Ejecutar Gold — Métricas
-        env:
-          DATABRICKS_CLUSTER_ID: ${{ secrets.DATABRICKS_CLUSTER_ID }}
-        run: |
-          echo "Ejecutando Gold Layer..."
-          RUN_ID=$(databricks runs submit \
-            --existing-cluster-id "$DATABRICKS_CLUSTER_ID" \
-            --notebook-task '{
-              "notebook_path": "/Repos/cicd/databricks_project/notebooks/gold/03_aggregate_metrics"
-            }' \
-            --run-name "CI_Gold_$(date +%Y%m%d_%H%M%S)" \
-            | python -c "import sys,json; print(json.load(sys.stdin)['run_id'])")
-
-          while true; do
-            STATE=$(databricks runs get --run-id $RUN_ID \
-              | python -c "import sys,json; d=json.load(sys.stdin); print(d['state']['life_cycle_state'])")
-            echo "Estado Gold: $STATE"
-            if [ "$STATE" = "TERMINATED" ]; then break; fi
-            sleep 15
-          done
-
-          RESULT=$(databricks runs get --run-id $RUN_ID \
-            | python -c "import sys,json; print(json.load(sys.stdin)['state']['result_state'])")
-          echo "Resultado Gold: $RESULT"
-          [ "$RESULT" = "SUCCESS" ] || exit 1
-
-      - name: 🎉 Pipeline completado
-        run: |
-          echo "============================================"
-          echo "✅ ETL Medallion ejecutado exitosamente"
-          echo "   Bronze → Silver → Gold"
-          echo "   $(date)"
-          echo "============================================"
+      - name: Pipeline completado
+        run: echo "✅ ETL Medallion ejecutado Bronze → Silver → Gold"
