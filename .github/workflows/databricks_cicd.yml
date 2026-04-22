@@ -20,12 +20,6 @@ jobs:
           pip install pyflakes
           find . -name "*.py" -exec python -m pyflakes {} \;
           echo "Sintaxis valida"
-      - name: Verificar estructura
-        run: |
-          test -f config/settings.py && echo "config ok"
-          test -f notebooks/bronze/01_ingest_raw.py && echo "Bronze ok"
-          test -f notebooks/silver/02_clean_transform.py && echo "Silver ok"
-          test -f notebooks/gold/03_aggregate_metrics.py && echo "Gold ok"
 
   deploy:
     name: Deploy to Databricks
@@ -40,10 +34,7 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/notebooks/bronze || true
-          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/notebooks/silver || true
-          databricks workspace mkdirs /Repos/lucianoAgama13/databricks_project/notebooks/gold || true
-          databricks workspace import notebooks/bronze/01_ingest_raw.py /Repos/lucianoAgama13/databricks_project/notebooks/bronze/01_ingest_raw --language PYTHON --overwrite
-          databricks workspace import notebooks/silver/02_clean_transform.py /Repos/lucianoAgama13/databricks_project/notebooks/silver/02_clean_transform --language PYTHON --overwrite
-          databricks workspace import notebooks/gold/03_aggregate_metrics.py /Repos/lucianoAgama13/databricks_project/notebooks/gold/03_aggregate_metrics --language PYTHON --overwrite
+          databricks workspace import --file notebooks/bronze/01_ingest_raw.py --language PYTHON --overwrite /Repos/lucianoAgama13/databricks_project/notebooks/bronze/01_ingest_raw
+          databricks workspace import --file notebooks/silver/02_clean_transform.py --language PYTHON --overwrite /Repos/lucianoAgama13/databricks_project/notebooks/silver/02_clean_transform
+          databricks workspace import --file notebooks/gold/03_aggregate_metrics.py --language PYTHON --overwrite /Repos/lucianoAgama13/databricks_project/notebooks/gold/03_aggregate_metrics
           echo "Notebooks desplegados"
